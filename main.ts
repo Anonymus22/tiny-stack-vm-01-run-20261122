@@ -6,17 +6,16 @@
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-// Opcode byte -> [immediate bytes, pops, pushes]. Absent byte = unknown opcode.
-const T: Record<number, number[]> = {
-  0: [0, 0, 0], 1: [1, 0, 1], 2: [4, 0, 1], 3: [0, 1, 0], 4: [0, 1, 2],
-  5: [0, 2, 2], 6: [0, 2, 3], 7: [0, 3, 3], 16: [0, 2, 1], 17: [0, 2, 1],
-  18: [0, 2, 1], 19: [0, 2, 1], 20: [0, 2, 1], 21: [0, 2, 1], 22: [0, 2, 1],
-  23: [0, 1, 1], 24: [0, 2, 1], 25: [0, 2, 1], 26: [0, 2, 1], 27: [0, 1, 1],
-  28: [0, 2, 1], 29: [0, 2, 1], 30: [0, 2, 1], 32: [0, 2, 1], 33: [0, 2, 1],
-  34: [0, 2, 1], 48: [2, 0, 0], 49: [2, 1, 0], 50: [2, 1, 0], 51: [2, 0, 0],
-  52: [0, 0, 0], 64: [0, 1, 1], 65: [0, 2, 0], 80: [0, 1, 0], 81: [0, 1, 0],
-  82: [0, 0, 1], 83: [0, 1, 0],
-};
+// Opcode byte -> one packed byte: imm | (pops << 3) | (pushes << 6); 255 = unknown.
+// A flat Uint8Array: one indexed load + bit-extracts per step, no hash lookup or
+// per-opcode arrays. Max packed value is 4 | 24 | 192 = 220, so 255 is a safe sentinel.
+const T = new Uint8Array(256).fill(255);
+const put = (o: number, im: number, po: number, pu: number) => { T[o] = im | (po << 3) | (pu << 6); };
+put(0, 0, 0, 0); put(1, 1, 0, 1); put(2, 4, 0, 1); put(3, 0, 1, 0); put(4, 0, 1, 2);
+put(5, 0, 2, 2); put(6, 0, 2, 3); put(7, 0, 3, 3);
+for (let o = 16; o <= 34; o++) if (o !== 31) put(o, 0, o === 23 || o === 27 ? 1 : 2, 1); // binary (0,2,1); 23 NEG / 27 NOT unary (0,1,1)
+put(48, 2, 0, 0); put(49, 2, 1, 0); put(50, 2, 1, 0); put(51, 2, 0, 0); put(52, 0, 0, 0);
+put(64, 0, 1, 1); put(65, 0, 2, 0); put(80, 0, 1, 0); put(81, 0, 1, 0); put(82, 0, 0, 1); put(83, 0, 1, 0);
 
 const enc = new TextEncoder();
 
@@ -35,8 +34,8 @@ function run(p: Uint8Array, inp: Uint8Array): { o: Uint8Array; c: number } {
     if (pc < 0 || pc >= n) return end(9);
     const op = p[pc];
     const t = T[op];
-    if (!t) return end(5);
-    const im = t[0], po = t[1], pu = t[2];
+    if (t === 255) return end(5);
+    const im = t & 7, po = (t >> 3) & 3, pu = t >> 6;
     if (pc + im >= n) return end(9);
     s++;
     const nx = pc + 1 + im;
